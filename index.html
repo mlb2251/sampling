@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="styles.css">
+
+    <title>Sampling</title>
+</head>
+<body>
+    <h1>Sampling</h1>
+    <div id="svg">
+        <svg>
+            <defs>
+                <marker id="arrowhead" markerWidth="5" markerHeight="3.5" refX="0" refY="1.75" orient="auto">
+                    <polygon points="0 0, 5 1.75, 0 3.5" />
+                </marker>
+            </defs>
+            <rect id="frame-background" />
+            <g id="frame-foreground"></g>
+        </svg>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="sampling.js"></script>
+</body>
+</html>
