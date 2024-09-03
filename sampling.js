@@ -86,8 +86,8 @@ function run() {
     })
 
     let proposal = {
-        random: () => random_normal(0, 2),
-        logpdf: (x) => logpdf_normal(x, 0, 2)
+        random: () => random_normal(1, 2),
+        logpdf: (x) => logpdf_normal(x, 1, 2)
     }
 
     let posterior = {
@@ -115,38 +115,51 @@ function run() {
         });
     }
 
-    let logZ = particles.reduce((a, b) => logaddexp(a, b.logweight), -Infinity) - Math.log(particles.length);
-    let Z = Math.exp(logZ);
-    console.log('Z', Z);
+
+    let resampled = multinomial_resample(particles);
+
+    let total_logweight = particles.reduce((a, b) => logaddexp(a, b.logweight), -Infinity);
+    let est_logZ = total_logweight - Math.log(particles.length);
+    let est_Z = Math.exp(est_logZ);
+    console.log('estimated Z', est_Z);
+
+
     graph.g.append('text')
         .attr('x', 10)
         .attr('y', 10)
-        .text(`Z = ${Z.toPrecision(3)}`)
+        .text(`Est Z = ${est_Z.toPrecision(3)}`)
         .attr('font-size', 20)
 
-    let total_logweight = particles.reduce((a, b) => logaddexp(a, b.logweight), -Infinity);
-    let max_logweight = particles.reduce((a, b) => Math.max(a, b.logweight), -Infinity);
 
+    let max_logweight = particles.reduce((a, b) => Math.max(a, b.logweight), -Infinity);
     let relative_max_weight = Math.exp(max_logweight - total_logweight)
     let max_particle_radius = 8;
+    // let avg_particle_radius = 40;
 
     // plot the samples
     for (let i = 0; i < particles.length; i++) {
         let particle = particles[i];
         let relative_weight = Math.exp(particle.logweight - total_logweight);
         let area_frac = relative_weight / relative_max_weight;
+        // let area_frac = relative_weight / est_Z;
         let r = max_particle_radius * Math.sqrt(area_frac);
+        // let r = avg_particle_radius * Math.sqrt(area_frac);
 
         // posterior
         graph.g.append('circle')
+            .classed("posterior", true)
             .attr('cx', graph.xScale(particle.x))
             .attr('cy', graph.yScale(Math.exp(particle.logp)))
             .attr('r', r)
             .attr('fill', 'black')
-            .attr('opacity', 0.3);
+            .attr('opacity', 0.3)
+            .on('click', () => {
+                console.log(particle)
+            })
         
         // proposal
         graph.g.append('circle')
+            .classed("proposal", true)
             .attr('cx', graph.xScale(particle.x))
             .attr('cy', graph.yScale(Math.exp(particle.logq)))
             .attr('r', 3)
@@ -154,9 +167,72 @@ function run() {
             .attr('opacity', 0.1);
     }
 
-
+    // plot the resampled particles
+    // for (let i = 0; i < resampled.ancestor_indices; i++) {
+    //     let ancestor = particles[resampled.ancestor_indices[i]];
+    //     let r = 1.5;
+    //     graph.g.append('circle')
+    //         .classed("resampled", true)
+    //         .attr('cx', graph.xScale(particle.x))
+    //         .attr('cy', graph.yScale(Math.exp(particle.logp)))
+    //         .attr('r', r)
+    //         .attr('fill', 'red')
+    //         .attr('opacity', 0.3);
+    // }
+    // for (let i = 0; i < resampled.particles.length; i++) {
+    //     let particle = resampled.particles[i];
+    //     let r = 1.5;
+    //     graph.g.append('circle')
+    //         .classed("resampled", true)
+    //         .attr('cx', graph.xScale(particle.x))
+    //         .attr('cy', graph.yScale(Math.exp(particle.logp)))
+    //         .attr('r', r)
+    //         .attr('fill', 'red')
+    //         .attr('opacity', 0.3);
+    // }
 
 }
+
+function multinomial_resample(particles) {
+    let N = particles.length;
+    let total_logweight = particles.reduce((a, b) => logaddexp(a, b.logweight), -Infinity);
+    let average_logweight = total_logweight - Math.log(particles.length);
+    let normalized_weights = particles.map(p => Math.exp(p.logweight - average_logweight));
+    let new_particles = [];
+    for (let i = 1; i < N; i++) {
+        let parent_idx = categorical(normalized_weights);
+        new_particles.push({
+            x: particles[parent_idx].x,
+            logweight: average_logweight,
+        })
+        set_parent_child(particles[parent_idx], new_particles[new_particles.length - 1]);
+    }
+    return new_particles;
+}
+
+function set_parent_child(parent,child) {
+    if (parent.children === undefined) {
+        parent.children = [];
+    }
+    parent.children.push(child);
+    child.parent = parent;
+}
+
+
+
+function categorical(weights) {
+    let total = weights.reduce((a, b) => a + b, 0);
+    let normalized_weights = weights.map(w => w / total);
+    let u = Math.random();
+    let i = 0;
+    let c = normalized_weights[0];
+    while (u > c) {
+        i++;
+        c += normalized_weights[i];
+    }
+    return i;
+}
+
 
 
 // from https://stackoverflow.com/questions/25582882/javascript-math-random-normal-distribution-gaussian-bell-curve
