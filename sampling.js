@@ -85,20 +85,16 @@ function run() {
         ymax: 1
     })
 
-    let proposal = {
-        random: () => random_normal(1, 2),
-        logpdf: (x) => logpdf_normal(x, 1, 2)
-    }
+    let proposal = normal(1,2)
+    let posterior = temperature(mixture(
+        [
+            normal(-2, .5),
+            normal(2, .5)
+        ],
+        [5,1]
+    ),1)
+    
 
-    let posterior = {
-        logpdf: (x) => /*Math.log(2) +*/ logpdf_mixture(x,
-            [
-                {logpdf: (x) => logpdf_normal(x, -2, .5)},
-                {logpdf: (x) => logpdf_normal(x, 2, .5)}
-            ],
-            [5, 1]
-        )
-    }
 
 
     // take a bunch of samples from a normal distribution
@@ -366,7 +362,29 @@ function categorical(weights) {
     return i;
 }
 
+function temperature(dist, T) {
+    return {
+        random: () => {throw new Error('temperature() doesnt support random')},
+        logpdf: (x) => dist.logpdf(x) / T
+    }
+}
 
+function mixture(dists, weights) {
+    return {
+        random: () => {
+            let i = categorical(weights);
+            return dists[i].random();
+        },
+        logpdf: (x) => logpdf_mixture(x, dists, weights)
+    }
+}
+
+function normal(mu, sigma) {
+    return {
+        random: () => random_normal(mu, sigma),
+        logpdf: (x) => logpdf_normal(x, mu, sigma)
+    }
+}
 
 // from https://stackoverflow.com/questions/25582882/javascript-math-random-normal-distribution-gaussian-bell-curve
 function random_normal(mu, sigma) {
