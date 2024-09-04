@@ -71,6 +71,19 @@ function logaddexp(a, b) {
     }
 }
 
+function propose(proposal, N) {
+    return Array(N).fill(0).map(() => ({
+        x: proposal.random(),
+        logweight: 0.,
+        dist: proposal
+    }));
+}
+function reweight(particles, posterior) {
+    for (let particle of particles) {
+        particle.logweight += posterior.logpdf(particle.x) - particle.dist.logpdf(particle.x);
+        particle.dist = posterior;
+    }
+}
 
 function run() {
 
@@ -85,6 +98,9 @@ function run() {
         ymax: 1
     })
 
+    let opacity = 0.1;
+    let max_particle_radius = 6;
+
     let proposal = normal(1,2)
     let posterior = temperature(mixture(
         [
@@ -94,37 +110,27 @@ function run() {
         [5,1]
     ),1)
     
-
-
-
     // take a bunch of samples from a normal distribution
-    let particles = [];
-    for (let i = 0; i < 400; i++) {
-        let x = proposal.random();
-        let logq = proposal.logpdf(x);
-        let logp = posterior.logpdf(x);
-        particles.push({
-            x: x,
-            logq: logq,
-            logp: logp,
-            logweight: logp - logq
-        });
+    let particles = propose(proposal, 200);
+    plot_particles(particles, graph, x => Math.exp(proposal.logpdf(x)), 'blue')
+    reweight(particles, posterior);
+    plot_particles(particles, graph, x => Math.exp(posterior.logpdf(x)), 'black')
+    let resampled = residual_resample_importance(particles, x=>x);
+    plot_particles(resampled, graph, x => -Math.exp(posterior.logpdf(x)), 'red')
+
+    // add bars showing resample counts
+    for (let particle of particles) {
+        let num_resampled = particle.children ? particle.children.length : 0;
+        graph.g.append('rect')
+            .attr('x', graph.xScale(particle.x))
+            .attr('y', graph.yScale(0))
+            .attr('width', 1)
+            .attr('height', graph.yScale(0) - graph.yScale(3 * num_resampled/particles.length))
+            .attr('fill', 'red')
     }
 
-    let opacity = 0.1;
-
-    // let resampled = multinomial_resample(particles);
-    // let resampled = residual_resample(particles);
-    let resampled = residual_resample_importance(particles, x=>x);
-    let total_logwt_resampled = total_logweight(resampled); // probably (always?) same as total_logwt
-    let max_wt_resampled = resampled.reduce((a, b) => Math.max(a, b.logweight), -Infinity);
-    let relative_max_weight_resampled = Math.exp(max_wt_resampled - total_logwt_resampled);
-
-    let total_logwt = total_logweight(particles)
     let est_logZ = average_logweight(particles);
     let est_Z = Math.exp(est_logZ);
-    console.log('estimated Z', est_Z);
-
 
     graph.g.append('text')
         .attr('x', 10)
@@ -133,110 +139,42 @@ function run() {
         .attr('font-size', 20)
 
 
+}
+
+
+
+function plot_particles(particles, graph, y_func, fill='black', opacity=0.1,  max_particle_radius = 6) {
+    // calculate some stats useful for plotting reasonable sized circles
+    let total_logwt = total_logweight(particles)
     let max_logwt = particles.reduce((a, b) => Math.max(a, b.logweight), -Infinity);
     let relative_max_weight = Math.exp(max_logwt - total_logwt)
-    let max_particle_radius = 6;
-    // let avg_particle_radius = 40;
+
+    let g_particles = graph.g.append('g')
 
     // plot the samples
     for (let i = 0; i < particles.length; i++) {
         let particle = particles[i];
+        // calc radius such that circle area is proportional to weight
         let relative_weight = Math.exp(particle.logweight - total_logwt);
         let area_frac = relative_weight / relative_max_weight;
-        // let area_frac = relative_weight / est_Z;
         let r = max_particle_radius * Math.sqrt(area_frac);
-        // let r = avg_particle_radius * Math.sqrt(area_frac);
-
-        // posterior
-        graph.g.append('circle')
-            .classed("posterior", true)
+        
+        g_particles.append('circle')
+            .classed("particle", true)
             .attr('cx', graph.xScale(particle.x))
-            .attr('cy', graph.yScale(Math.exp(particle.logp)))
+            .attr('cy', graph.yScale(y_func(particle.x)))
             .attr('r', r)
-            .attr('fill', 'black')
+            .attr('fill', fill)
             .attr('opacity', opacity)
             .on('click', () => {
                 console.log(particle)
             })
-        
-        // proposal
-        graph.g.append('circle')
-            .classed("proposal", true)
-            .attr('cx', graph.xScale(particle.x))
-            .attr('cy', graph.yScale(Math.exp(particle.logq)))
-            .attr('r', 3)
-            .attr('fill', 'blue')
-            .attr('opacity', opacity);
-
-        let num_resampled = particle.children ? particle.children.length : 0;
-        // add a little bar to show how many children this particle has
-        graph.g.append('rect')
-            .attr('x', graph.xScale(particle.x))
-            .attr('y', graph.yScale(0))
-            .attr('width', 1)
-            .attr('height', graph.yScale(0) - graph.yScale(3 * num_resampled/particles.length))
-            .attr('fill', 'red')
-
-        // lets plot all of the children of the particle as little red circles opacity 0.3 mirrored over the x axis from this graph, using -logp as y
-        if (particle.children) {
-            for (let j = 0; j < particle.children.length; j++) {
-                let child = particle.children[j];
-                let relative_weight = Math.exp(child.logweight - total_logwt_resampled);
-                let area_frac = relative_weight / relative_max_weight_resampled;
-                let r = max_particle_radius * Math.sqrt(area_frac);
-    
-                graph.g.append('circle')
-                    .classed("child", true)
-                    .attr('cx', graph.xScale(child.x))
-                    .attr('cy', graph.yScale(-Math.exp(particle.logp)))
-                    .attr('r', r)
-                    .attr('fill', 'red')
-                    .attr('opacity', opacity)
-            }
-        }
-
-        // and add a little circle on end of size based on weight of first child
-        // if (particle.children) {
-        //     let child = particle.children[0];
-        //     let relative_weight = Math.exp(child.logweight - total_logwt);
-        //     let area_frac = relative_weight / relative_max_weight;
-        //     let r = max_particle_radius * Math.sqrt(area_frac);
-        //     graph.g.append('circle')
-        //         .attr('cx', graph.xScale(child.x))
-        //         .attr('cy', graph.yScale(0) + graph.yScale(0) - graph.yScale(3 * num_resampled/particles.length))
-        //         .attr('r', r)
-        //         .attr('fill', 'red')
-        //         .attr('opacity', 0.3)
-        // }
-        
-
     }
-
-    // plot the resampled particles
-    // for (let i = 0; i < resampled; i++) {
-    //     let ancestor = particles[resampled.ancestor_indices[i]];
-    //     let r = 1.5;
-    //     graph.g.append('circle')
-    //         .classed("resampled", true)
-    //         .attr('cx', graph.xScale(particle.x))
-    //         .attr('cy', graph.yScale(Math.exp(particle.logp)))
-    //         .attr('r', r)
-    //         .attr('fill', 'red')
-    //         .attr('opacity', 0.3);
-    // }
-    // for (let i = 0; i < resampled.particles.length; i++) {
-    //     let particle = resampled.particles[i];
-    //     let r = 1.5;
-    //     graph.g.append('circle')
-    //         .classed("resampled", true)
-    //         .attr('cx', graph.xScale(particle.x))
-    //         .attr('cy', graph.yScale(Math.exp(particle.logp)))
-    //         .attr('r', r)
-    //         .attr('fill', 'red')
-    //         .attr('opacity', 0.3);
-    // }
-
+    return {
+        g: g_particles,
+    }
 }
+
 
 function logsumexp(logweights){
     return logweights.reduce((a, b) => logaddexp(a, b), -Infinity);
