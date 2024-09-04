@@ -71,22 +71,65 @@ function logaddexp(a, b) {
     }
 }
 
-function propose(proposal, N) {
-    return Array(N).fill(0).map(() => ({
-        x: proposal.random(),
-        logweight: 0.,
-        dist: proposal
-    }));
+function propose(Q, P, N) {
+    return Array(N).fill(0).map(() => {
+        let x = Q.random();
+        return {
+            x: x,
+            logweight: P.logpdf(x) - Q.logpdf(x)
+        }
+    });
 }
-function reweight(particles, posterior) {
-    for (let particle of particles) {
-        particle.logweight += posterior.logpdf(particle.x) - particle.dist.logpdf(particle.x);
-        particle.dist = posterior;
-    }
+
+function reweight(particles, P, Q) {
+    return particles.map(particle => ({
+        x: particle.x,
+        logweight: particle.logweight + P.logpdf(particle.x) - Q.logpdf(particle.x)
+    }))
 }
 
 function run() {
+    // example graph
+    let algo_result = importance_sampling_example(200);
+    graph_IS(algo_result);
 
+    // scalling number of particles
+    console.log("IS with 100 particles")
+    evaluate_algorithm(() => importance_sampling_example(100), 1000);
+    console.log("IS with 200 particles")
+    evaluate_algorithm(() => importance_sampling_example(200), 1000);
+    console.log("IS with 500 particles")
+    evaluate_algorithm(() => importance_sampling_example(500), 1000);
+
+    // better proposal (less badly offset)
+    console.log("=====================================")
+    console.log("Ok proposal")
+    evaluate_algorithm(() => importance_sampling_example(200), 2000);
+    console.log("Better proposal")
+    evaluate_algorithm(() => importance_sampling_example(200, normal(0,2)), 2000);
+
+}
+
+function importance_sampling_example(N, proposal = normal(1,2)) {
+    let posterior = temperature(mixture(
+        [
+            normal(-2, .5),
+            normal(2, .5)
+        ],
+        [5,1]
+    ),1)
+    let particles = propose(proposal, posterior, N);
+    let resampled = residual_resample_importance(particles, x=>x);
+    return {
+        particles: particles,
+        resampled: resampled,
+        proposal: proposal,
+        posterior: posterior
+    }
+}
+
+function graph_IS(IS_result) {
+    let {particles, resampled, proposal, posterior} = IS_result;
     const graph = makeGraph({
         x: 100,
         y: 100,
@@ -97,26 +140,12 @@ function run() {
         ymin: 0,
         ymax: 1
     })
-
-    let opacity = 0.1;
-    let max_particle_radius = 6;
-
-    let proposal = normal(1,2)
-    let posterior = temperature(mixture(
-        [
-            normal(-2, .5),
-            normal(2, .5)
-        ],
-        [5,1]
-    ),1)
-    
-    // take a bunch of samples from a normal distribution
-    let particles = propose(proposal, 200);
-    plot_particles(particles, graph, x => Math.exp(proposal.logpdf(x)), 'blue')
-    reweight(particles, posterior);
+    plot_particles(particles, graph, x => Math.exp(proposal.logpdf(x)), 'blue', true)
+    graph.g.append('text').text('Proposal').attr('x', graph.spec.width).attr('y',0).attr('fill', 'blue')
     plot_particles(particles, graph, x => Math.exp(posterior.logpdf(x)), 'black')
-    let resampled = residual_resample_importance(particles, x=>x);
+    graph.g.append('text').text('Posterior').attr('x', graph.spec.width).attr('y',20).attr('fill', 'black')
     plot_particles(resampled, graph, x => -Math.exp(posterior.logpdf(x)), 'red')
+    graph.g.append('text').text('Resampled (flipped)').attr('x', graph.spec.width).attr('y',40).attr('fill', 'red')
 
     // add bars showing resample counts
     for (let particle of particles) {
@@ -129,21 +158,44 @@ function run() {
             .attr('fill', 'red')
     }
 
-    let est_logZ = average_logweight(particles);
-    let est_Z = Math.exp(est_logZ);
-
+    // display Z estimate
+    let log_mean_wt = log_mean_weight(particles);
+    let Z_est = Math.exp(log_mean_wt);
     graph.g.append('text')
         .attr('x', 10)
         .attr('y', 10)
-        .text(`Est Z = ${est_Z.toPrecision(3)}`)
-        .attr('font-size', 20)
+        .text(`Z ≈ ${Z_est.toPrecision(3)}`)
+    graph.g.append('text')
+        .attr('x', 10)
+        .attr('y', 30)
+        .text(`log mean w = ${log_mean_wt.toPrecision(3)}`)
+}
 
+function evaluate_algorithm(algorithm, M=1000) {
+    let log_mean_wts = [];
+    for (let i=0; i<M; i++) {
+        let particles = algorithm().particles;
+        log_mean_wts.push(log_mean_weight(particles));
+    }
 
+    let z_estimates = log_mean_wts.map(w => Math.exp(w));
+    let avg_z_est = z_estimates.reduce((a, b) => a + b, 0) / M;
+    let avg_log_mean_wt = log_mean_wts.reduce((a, b) => a + b, 0) / M;
+    // console.log("E[mean w]", avg_z_est)
+    // console.log("log E[mean w]", Math.log(avg_z_est))
+    console.log("E[log mean w]", avg_log_mean_wt)
+    // console.log("KL div = ", avg_log_mean_wt - Math.log(avg_z_est))
+    return {
+        E_mean_w: avg_z_est,
+        log_E_mean_w: Math.log(avg_z_est),
+        E_log_mean_w: avg_log_mean_wt,
+        est_KLD: avg_log_mean_wt - Math.log(avg_z_est),
+    }
 }
 
 
 
-function plot_particles(particles, graph, y_func, fill='black', opacity=0.1,  max_particle_radius = 6) {
+function plot_particles(particles, graph, y_func = x => 0, fill='black', fix_size=false, opacity=0.1,  max_particle_radius = 6) {
     // calculate some stats useful for plotting reasonable sized circles
     let total_logwt = total_logweight(particles)
     let max_logwt = particles.reduce((a, b) => Math.max(a, b.logweight), -Infinity);
@@ -158,6 +210,9 @@ function plot_particles(particles, graph, y_func, fill='black', opacity=0.1,  ma
         let relative_weight = Math.exp(particle.logweight - total_logwt);
         let area_frac = relative_weight / relative_max_weight;
         let r = max_particle_radius * Math.sqrt(area_frac);
+        if (fix_size) {
+            r = max_particle_radius/2;
+        }
         
         g_particles.append('circle')
             .classed("particle", true)
@@ -179,11 +234,14 @@ function plot_particles(particles, graph, y_func, fill='black', opacity=0.1,  ma
 function logsumexp(logweights){
     return logweights.reduce((a, b) => logaddexp(a, b), -Infinity);
 }
+function logmeanexp(logweights){
+    return logsumexp(logweights) - Math.log(logweights.length);
+}
 
 function total_logweight(particles) {
     return particles.reduce((a, b) => logaddexp(a, b.logweight), -Infinity);
 }
-function average_logweight(particles) {
+function log_mean_weight(particles) {
     return total_logweight(particles) - Math.log(particles.length);
 }
 function normalized_logweights(particles) {
@@ -196,14 +254,14 @@ function normalized_weights(particles) {
 
 function multinomial_resample(particles) {
     let N = particles.length;
-    let avg_logwt = average_logweight(particles);
+    let Z_est = log_mean_weight(particles);
     let normalized_wts = normalized_weights(particles);
     let new_particles = [];
     while (new_particles.length < N) {
         let parent_idx = categorical(normalized_wts);
         new_particles.push({
             x: particles[parent_idx].x,
-            logweight: avg_logwt,
+            logweight: Z_est,
         })
         set_parent_child(particles[parent_idx], new_particles[new_particles.length - 1]);
     }
@@ -212,7 +270,7 @@ function multinomial_resample(particles) {
 
 function residual_resample(particles) {
     let N = particles.length;
-    let avg_logwt = average_logweight(particles);
+    let Z_est = log_mean_weight(particles);
     let normalized_wts = normalized_weights(particles);
     let floorN_normalized_wts = normalized_wts.map(w => Math.floor(w * N));
     let residual_wts = normalized_wts.map(w => w * N - Math.floor(w * N));
@@ -222,7 +280,7 @@ function residual_resample(particles) {
         for (let j = 0; j < floorN_normalized_wts[i]; j++) {
             new_particles.push({
                 x: particles[i].x,
-                logweight: avg_logwt,
+                logweight: Z_est,
             })
             set_parent_child(particles[i], new_particles[new_particles.length - 1]);
         }
@@ -232,7 +290,7 @@ function residual_resample(particles) {
         let i = categorical(residual_wts);
         new_particles.push({
             x: particles[i].x,
-            logweight: avg_logwt,
+            logweight: Z_est,
         })
         set_parent_child(particles[i], new_particles[new_particles.length - 1]);
     }
@@ -241,7 +299,7 @@ function residual_resample(particles) {
 
 function residual_resample_importance(particles, proposal) {
     let N = particles.length;
-    let avg_logwt = average_logweight(particles);
+    let Z_est = log_mean_weight(particles);
     let normalized_logwts = normalized_logweights(particles);
 
     // calculate target/proposal importance weights where target is the residual resampling distribution
@@ -260,7 +318,7 @@ function residual_resample_importance(particles, proposal) {
         for (let j = 0; j < floorN_normalized_priorities[i]; j++) {
             new_particles.push({
                 x: particles[i].x,
-                logweight: avg_logwt + importance_logwts[i],
+                logweight: Z_est + importance_logwts[i]
             })
             set_parent_child(particles[i], new_particles[new_particles.length - 1]);
         }
@@ -270,7 +328,7 @@ function residual_resample_importance(particles, proposal) {
         let i = categorical(residual_wts);
         new_particles.push({
             x: particles[i].x,
-            logweight: avg_logwt + importance_logwts[i],
+            logweight: Z_est + importance_logwts[i],
         })
         set_parent_child(particles[i], new_particles[new_particles.length - 1]);
     }
